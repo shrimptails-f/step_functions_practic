@@ -29,12 +29,12 @@ infra/
 │   ├── parent-task/
 │   │   ├── main.go
 │   │   ├── go.mod
-│       ├── go.sum
+│   │   ├── go.sum
 │   │   └── Dockerfile
 │   ├── worker-task/
 │   │   ├── main.go
 │   │   ├── go.mod
-│       ├── go.sum
+│   │   ├── go.sum
 │   │   └── Dockerfile
 │   └── lambda-handler/
 │       ├── main.go
