@@ -1,0 +1,18 @@
+version: '3'
+
+tasks:
+  setup:
+    desc: 'ローカル環境のセットアップを行う。(gitコマンドが使用できるようにする)'
+    cmds:
+      - cp {{.APP_ROOT}}/.gitconfig /home/node/.gitconfig
+      - git config --global core.autocrlf input
+      - git config --global --add safe.directory {{.APP_ROOT}}
+      # わざわざコピーする理由は、commit時に毎回メアドとユーザー名の設定(.gitconfigの作成)を求められ面倒なので、git cloneするなら作成済みであろう.gitconfigを使うという魂胆である。
+      # だが、Windowsユーザーが.gitconfigを使用中と解釈されるようでgit configコマンドが失敗するため、ファイルをコピーする必要がある。
+      # core.autocrlf inputを使用する理由は、Linuxの改行コードが原因で差分が表示されてしまうため。
+      # safe.directory $APP_ROOTを使用する理由は、WSL2側に配置しgitを使うには毎回求められるため。
+
+  codex:
+    desc: 'codexに権限をあたえて、コマンド確認させずに実行します。DevContainer(ガードレール付環境)内でのみ実行してください。'
+    cmds:
+      - codex --dangerously-bypass-approvals-and-sandbox

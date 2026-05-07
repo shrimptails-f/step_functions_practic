@@ -1,0 +1,35 @@
+{
+  "editor.formatOnSave": true,
+  "[packer]": {
+    "editor.defaultFormatter": "szTheory.vscode-packer-powertools",
+    "editor.formatOnSave": true
+  },
+  "[terraform]": {
+    "editor.defaultFormatter": "hashicorp.terraform",
+    "editor.formatOnSave": true
+  },
+  "[terraform-vars]": {
+    "editor.defaultFormatter": "hashicorp.terraform",
+    "editor.formatOnSave": true
+  },
+  "terraform.experimentalFeatures.validateOnSave": true,
+  "cSpell.ignoreWords": [
+    "hashicorp",
+    "tfstate",
+    "tfvars",
+    "hostnames",
+    "hediet",
+    "sztheory",
+    "powertool",
+    "shrimptails",
+    "shrimptail",
+    "Billingrse",
+    "chdir",
+    "dmarc",
+    "dkim",
+    "adkim",
+    "aspf",
+    "amazonses", // amazon ses
+    "domainkey"
+  ]
+}

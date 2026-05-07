@@ -1,0 +1,14 @@
+version: "3"
+services:
+  infra:
+    build:
+      context: ../
+      dockerfile: .devcontainer/infra/Dockerfile
+      args:
+        - APP_ROOT=$APP_ROOT
+    env_file:
+      - .env
+    volumes:
+      - ../:$APP_ROOT
+      - ~/.gitconfig:$APP_ROOT/.gitconfig
+    tty: true

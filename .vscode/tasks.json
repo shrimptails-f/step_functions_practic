@@ -1,0 +1,98 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "codex callback access",
+      "type": "shell",
+      "command": "curl -v '${input:codex_callback}'",
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always"
+      }
+    },
+    {
+      "label": "deploy: dev network (init)",
+      "type": "shell",
+      "hide": true,
+      "command": "terraform -chdir=/home/dev/infra/stage/dev/network init",
+    },
+    {
+      "label": "deploy: dev network (apply)",
+      "type": "shell",
+      "hide": true,
+      "command": "terraform -chdir=/home/dev/infra/stage/dev/network apply -auto-approve",
+    },
+    {
+      "label": "deploy: dev account (init)",
+      "type": "shell",
+      "hide": true,
+      "command": "terraform -chdir=/home/dev/infra/stage/dev/account init",
+    },
+    {
+      "label": "deploy: dev account (apply)",
+      "type": "shell",
+      "hide": true,
+      "command": "terraform -chdir=/home/dev/infra/stage/dev/account apply -auto-approve",
+    },
+    {
+      "label": "deploy: dev application (init)",
+      "type": "shell",
+      "hide": true,
+      "command": "terraform -chdir=/home/dev/infra/stage/dev/application init",
+    },
+    {
+      "label": "deploy: dev application (apply)",
+      "type": "shell",
+      "hide": true,
+      "command": "terraform -chdir=/home/dev/infra/stage/dev/application apply -auto-approve",
+    },
+    {
+      "label": "作成: network -> account -> application",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "deploy: dev network (init)",
+        "deploy: dev network (apply)",
+        "deploy: dev account (init)",
+        "deploy: dev account (apply)",
+        "deploy: dev application (init)",
+        "deploy: dev application (apply)"
+      ],
+    },
+    {
+      "label": "destroy: dev application (destroy)",
+      "type": "shell",
+      "hide": true,
+      "command": "terraform -chdir=/home/dev/infra/stage/dev/application destroy -auto-approve",
+    },
+    {
+      "label": "destroy: dev account (destroy)",
+      "type": "shell",
+      "hide": true,
+      "command": "terraform -chdir=/home/dev/infra/stage/dev/account destroy -auto-approve",
+    },
+    {
+      "label": "destroy: dev network (destroy)",
+      "type": "shell",
+      "hide": true,
+      "command": "terraform -chdir=/home/dev/infra/stage/dev/network destroy -auto-approve",
+    },
+    {
+      "label": "削除: application -> account -> network",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "destroy: dev application (destroy)",
+        "destroy: dev account (destroy)",
+        "destroy: dev network (destroy)"
+      ],
+    }
+  ],
+  "inputs": [
+    {
+      "id": "codex_callback",
+      "type": "promptString",
+      "description": "callbackのURLを入力してください",
+      "default": "http://localhost:1455/auth/callback?"
+    }
+  ]
+}
