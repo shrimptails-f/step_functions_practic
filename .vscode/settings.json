@@ -23,13 +23,15 @@
     "powertool",
     "shrimptails",
     "shrimptail",
-    "Billingrse",
     "chdir",
     "dmarc",
     "dkim",
     "adkim",
     "aspf",
     "amazonses", // amazon ses
-    "domainkey"
+    "domainkey",
+    "statemachine",
+    "Taskfile",
+    "templatefile",
   ]
 }
