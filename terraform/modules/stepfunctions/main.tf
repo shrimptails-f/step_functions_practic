@@ -52,8 +52,9 @@ locals {
     var.worker_container_name
   )
 
-  with_bucket         = replace(local.definition, "__WORKERS_S3_BUCKET__", var.workers_s3_bucket)
-  rendered_definition = replace(local.with_bucket, "__RESULT_AGGREGATOR_LAMBDA_ARN__", var.result_aggregator_lambda_arn)
+  with_workers_bucket = replace(local.definition, "__WORKERS_S3_BUCKET__", var.workers_s3_bucket)
+  with_results_bucket = replace(local.with_workers_bucket, "__RESULTS_S3_BUCKET__", var.workers_s3_bucket)
+  rendered_definition = replace(local.with_results_bucket, "__RESULT_AGGREGATOR_LAMBDA_ARN__", var.result_aggregator_lambda_arn)
 }
 
 resource "aws_sfn_state_machine" "this" {

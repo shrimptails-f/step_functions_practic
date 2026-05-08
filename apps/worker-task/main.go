@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,15 +11,17 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 )
 
 type WorkerInput struct {
-	WorkerID   string          `json:"workerId"`
-	Payload    json.RawMessage `json:"payload"`
-	RetryCount int             `json:"retryCount"`
-	RetryLimit int             `json:"retryLimit"`
-	JobID      string          `json:"jobId"`
+	WorkerID    string          `json:"workerId"`
+	Payload     json.RawMessage `json:"payload"`
+	RetryCount  int             `json:"retryCount"`
+	RetryLimit  int             `json:"retryLimit"`
+	JobID       string          `json:"jobId"`
+	ResultS3Key string          `json:"resultS3Key"`
 }
 
 type Result struct {
@@ -38,15 +41,23 @@ func main() {
 		fmt.Fprintln(os.Stderr, fmt.Sprintf("invalid WORKER_INPUT: %v", err))
 		os.Exit(1)
 	}
-
-	if input.WorkerID == "w2" && input.RetryCount == 0 {
-		fmt.Fprintln(os.Stderr, "forced retryable failure for worker w2 first attempt")
+	if input.ResultS3Key == "" {
+		fmt.Fprintln(os.Stderr, "WORKER_INPUT.resultS3Key is required")
+		os.Exit(1)
+	}
+	resultsBucket := os.Getenv("RESULTS_S3_BUCKET")
+	if resultsBucket == "" {
+		fmt.Fprintln(os.Stderr, "RESULTS_S3_BUCKET is required")
 		os.Exit(1)
 	}
 
-	if input.WorkerID == "w3" {
-		fmt.Fprintln(os.Stderr, "forced failure for worker w3")
-		os.Exit(1)
+	if result, failed := buildFailureResultByPoCRule(input); failed {
+		if err := putResultToS3(context.Background(), resultsBucket, input.ResultS3Key, result); err != nil {
+			fmt.Fprintln(os.Stderr, fmt.Sprintf("failed to save worker result to s3: %v", err))
+			os.Exit(1)
+		}
+		printResultAndExit(result)
+		return
 	}
 
 	productSucceeded := processProductsConcurrently()
@@ -61,7 +72,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	printResultAndExit(Result{
+	successResult := Result{
 		Status:           "SUCCEEDED",
 		ErrorType:        "",
 		Message:          "processed products and queued messages",
@@ -70,7 +81,40 @@ func main() {
 		QueuedCount:      queuedCount,
 		WorkerID:         input.WorkerID,
 		Payload:          input.Payload,
-	})
+	}
+	if err := putResultToS3(context.Background(), resultsBucket, input.ResultS3Key, successResult); err != nil {
+		fmt.Fprintln(os.Stderr, fmt.Sprintf("failed to save worker result to s3: %v", err))
+		os.Exit(1)
+	}
+	printResultAndExit(successResult)
+}
+
+func buildFailureResultByPoCRule(input WorkerInput) (Result, bool) {
+	if input.WorkerID == "w2" && input.RetryCount == 0 {
+		return Result{
+			Status:           "FAILED",
+			ErrorType:        "RETRYABLE",
+			Message:          "forced retryable failure for worker w2 first attempt",
+			ProductTotal:     2,
+			ProductSucceeded: 0,
+			QueuedCount:      0,
+			WorkerID:         input.WorkerID,
+			Payload:          input.Payload,
+		}, true
+	}
+	if input.WorkerID == "w3" {
+		return Result{
+			Status:           "FAILED",
+			ErrorType:        "NON_RETRYABLE",
+			Message:          "forced non-retryable failure for worker w3",
+			ProductTotal:     2,
+			ProductSucceeded: 0,
+			QueuedCount:      0,
+			WorkerID:         input.WorkerID,
+			Payload:          input.Payload,
+		}, true
+	}
+	return Result{}, false
 }
 
 func readInputFromEnv() (WorkerInput, error) {
@@ -154,6 +198,30 @@ func sendMessagesToSQS(input WorkerInput) (int, error) {
 	}
 
 	return queued, nil
+}
+
+func putResultToS3(ctx context.Context, bucket, key string, result Result) error {
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("load aws config: %w", err)
+	}
+	client := s3.NewFromConfig(cfg)
+
+	body, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("marshal result: %w", err)
+	}
+
+	_, err = client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(body),
+		ContentType: aws.String("application/json"),
+	})
+	if err != nil {
+		return fmt.Errorf("put object: %w", err)
+	}
+	return nil
 }
 
 func printResultAndExit(result Result) {

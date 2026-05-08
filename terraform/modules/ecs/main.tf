@@ -66,6 +66,10 @@ resource "aws_ecs_task_definition" "worker" {
         {
           name  = "SQS_QUEUE_URL"
           value = var.sqs_queue_url
+        },
+        {
+          name  = "RESULTS_S3_BUCKET"
+          value = var.workers_s3_bucket
         }
       ]
       logConfiguration = {

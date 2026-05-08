@@ -141,8 +141,9 @@ PoC では以下を確認対象とします。
   - `Inline Map` は 1 item の失敗で `Map` 全体が失敗し、他 item の処理も停止する
   - 本 PoC は「部分失敗を許容しつつ全件処理を継続し、後段で失敗 item を再実行判定する」方針のため
 - 運用方針
-  - 業務失敗はワーカー出力の `status=FAILED` として返し、Task failure にはしない
-  - 技術失敗のみ Step Functions の `Retry/Catch` で扱う
+  - ワーカーは業務結果（成功/失敗）を S3 (`results/...`) に JSON 保存する
+  - Step Functions は `RunTask.sync` の成功/失敗と `Catch` で技術失敗を扱う
+  - 集約 Lambda が S3 の業務結果 JSON を読み取り、再試行対象を抽出する
   - `ToleratedFailurePercentage = 100` を設定し、Map の途中打ち切りを避ける
   - 最終成否は `failedWorkersFinal` の有無で判定する
 
@@ -150,19 +151,20 @@ PoC では以下を確認対象とします。
 
 ```text
 Start
-  -> RunParentTask
-  -> ValidateParentOutput
-  -> InitializeRetryCount
-  -> RunWorkersInParallel (Map)
-  -> AggregateWorkerResults
-  -> Choice: FailedWorkersExist?
-  -> Choice: RetryCountUnderLimit?
-  -> PrepareFailedWorkersForRetry
-  -> RunWorkersInParallel (Map) ...
+  -> ValidateWorkflowInput
+  -> InitializeWorkflowContext
+  -> RunParentTaskSync
+  -> ValidateParentTaskCompletion
+  -> RunInitialWorkerTasksFromS3 (Map)
+  -> AggregateWorkerTaskAttemptResults
+  -> Choice: HasRetryableFailedWorkerTasks?
+  -> Choice: CanRetryFailedWorkerTasks?
+  -> PrepareNextRetryWorkerTasks
+  -> RunRetryWorkerTasks (Map) ...
   -> Success or FinishWithFailedWorkers
 
 Error:
-  -> NotifyFailure or Fail
+  -> FailInvalidWorkflowInput / FailParentTaskExecution
 ```
 
 ### リトライ設計
@@ -170,8 +172,8 @@ Error:
 - 基本方針
   - 親タスクからワーカータスクへは、Step Functions の状態データとして値を受け渡す
   - 親タスクは `workers` 配列を S3 に書き出し、Map は ItemReader で S3 から直接読み込む
-  - リトライ判定は `リトライしてよい失敗` と `リトライしてはいけない失敗` で分ける
-  - ただし Step Functions の扱いとしては、内部的に `技術失敗` と `業務失敗` を分離する
+  - ワーカー結果は S3 (`results/...`) に保存し、集約 Lambda が読み取って再実行判定する
+  - Step Functions の `Retry` は ECS 起動失敗など一時的な技術失敗の吸収に使う
 
 - `RunParentTask`
   - ECS の一時失敗を対象に 1 回リトライ
@@ -179,15 +181,18 @@ Error:
 - `RunParentTask` の入出力
   - 入力は Step Functions 実行開始時の JSON をそのまま親タスクへ渡す
   - 出力 JSON は Step Functions に直接返さず、S3 オブジェクト `workers/<batchId>.json` として保存する
-- `RunWorkersInParallel`
+- `RunInitialWorkerTasksFromS3` / `RunRetryWorkerTasks`
   - ECS 起動の一時失敗は Step Functions の `Retry` で 1 回吸収
   - リトライ間隔は 10 秒
   - ItemReader で取得した `workers[*]` を各ワーカータスクへそのまま渡す
-  - 業務失敗は item 単位で結果化し、失敗ワーカーのみ再実行対象とする
+  - `WORKER_INPUT` には `resultS3Key` も含め、ワーカー結果保存先を一意化する
 - `RetryFailedWorkers`
   - 再実行対象は失敗ワーカーのみ
   - PoC では再実行上限は 1 回
   - `retryLimit` を超えたら打ち切る
+- `AggregateWorkerTaskAttemptResults`
+  - 今回試行の結果を集約し、`failedWorkers` / `failedWorkersFinal` / `allResults` を更新する
+  - `status=TASK_SUCCEEDED` の item は S3 の結果 JSON を読み込んで最終結果に正規化する
 - Lambda
   - SQS の再試行ポリシーに従う
   - 一定回数超過で DLQ へ退避
@@ -224,7 +229,8 @@ Error:
   - 特定 `workerId` を固定で失敗させるケース
 - Step Functions への伝え方
   - ECS タスク自体は `exit 0` で終了する
-  - ワーカータスク出力 JSON の `status` と `errorType` で結果を返す
+  - ワーカーは S3 (`results/...`) に `status/errorType/message` を含む JSON を保存する
+  - 集約 Lambda が S3 から読み込んだ結果を基に再試行判定する
 - 判定
   - `errorType = RETRYABLE` は再実行対象
   - `errorType = NON_RETRYABLE` は即時に最終失敗対象
@@ -255,12 +261,11 @@ Error:
 }
 ```
 
-#### なぜ `NON_RETRYABLE` を `exit 1` にしないか
+#### なぜ業務失敗を S3 経由にするか
 
-- `exit 1` にすると Step Functions 上では Task state failure として扱われる
-- その場合、`Retry` / `Catch` の制御には乗せやすいが、失敗ワーカー一覧として集約しにくい
-- 今回の PoC では、失敗したワーカー入力と失敗種別を保持しながら後続分岐したい
-- そのため、業務失敗は `exit 0` とし、結果 JSON で `RETRYABLE` / `NON_RETRYABLE` を返す
+- `ecs:runTask.sync` はコンテナ標準出力 JSON を Step Functions の次State出力として直接渡せない
+- そのため、業務結果を確実に集約するために S3 保存 + 集約 Lambda 読み込みを採用する
+- これにより失敗ワーカー一覧と失敗種別（`RETRYABLE`/`NON_RETRYABLE`）を安定的に保持できる
 
 #### PoC でのハードコード方針
 
@@ -271,9 +276,9 @@ Error:
   - `w3` は成功
 - この判定は PoC 用ロジックとしてコード内に直接持たせる
 
-### 4.2 ワーカー出力仕様
+### 4.2 ワーカー出力仕様（S3保存）
 
-ワーカータスクは、成功/失敗を問わず以下の形式で結果を返す。
+ワーカータスクは、成功/失敗を問わず以下の形式で結果JSONを S3 に保存する。
 
 ```json
 {
@@ -314,8 +319,8 @@ Error:
 
 - Step Functions State Machine `TimeoutSeconds = 900`
 - `RunParentTask` (`ecs:runTask.sync`) `TimeoutSeconds = 120`
-- `RunWorkersInParallel` の各 item (`ecs:runTask.sync`) `TimeoutSeconds = 120`
-- `RunParentTask` / `RunWorkersInParallel` の ECS 起動系 `Retry`
+- `RunInitialWorkerTasksFromS3` / `RunRetryWorkerTasks` の各 item (`ecs:runTask.sync`) `TimeoutSeconds = 120`
+- `RunParentTask` / `RunInitialWorkerTasksFromS3` / `RunRetryWorkerTasks` の ECS 起動系 `Retry`
   - `MaxAttempts = 2`
   - `IntervalSeconds = 10`
   - `BackoffRate = 2.0`
@@ -424,7 +429,7 @@ PoC では以下の割り切りを行います。
 
 - 親タスク、ワーカータスク、Lambda は Go で簡素に実装する
 - 業務データはダミー JSON を使用する
-- 永続ストアは使わない
+- workers/result 受け渡しのため S3 は利用する
 - Lambda の結果保存先は設けず、CloudWatch Logs のみで確認する
 - 外部通知は入れない
 - まずは同期的な ECS 完了待ちを採用する

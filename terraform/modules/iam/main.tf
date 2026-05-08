@@ -66,6 +66,11 @@ resource "aws_iam_role_policy" "worker_task" {
         Effect   = "Allow"
         Action   = ["sqs:SendMessage"]
         Resource = var.sqs_queue_arn
+      },
+      {
+        Effect = "Allow"
+        Action = ["s3:PutObject"]
+        Resource = ["${var.workers_bucket_arn}/results/*"]
       }
     ]
   })
@@ -116,11 +121,18 @@ resource "aws_iam_role_policy" "aggregator_lambda" {
   role = aws_iam_role.aggregator_lambda.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
-      Resource = "*"
-    }]
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = ["s3:GetObject"]
+        Resource = ["${var.workers_bucket_arn}/results/*"]
+      }
+    ]
   })
 }
 

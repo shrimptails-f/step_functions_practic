@@ -109,6 +109,7 @@
         "retryLimit.$": "$.retryLimit",
         "workerId.$": "$$.Map.Item.Value.workerId",
         "payload.$": "$$.Map.Item.Value.payload",
+        "resultS3Key.$": "States.Format('results/{}/{}-attempt-{}.json', $.jobId, $$.Map.Item.Value.workerId, $.retryCount)",
         "executionArn.$": "$$.Execution.Id"
       },
       "ItemProcessor": {
@@ -139,6 +140,7 @@
                     "Name": "__WORKER_CONTAINER_NAME__",
                     "Environment": [
                       { "Name": "WORKER_INPUT", "Value.$": "States.JsonToString($)" },
+                      { "Name": "RESULTS_S3_KEY", "Value.$": "$.resultS3Key" },
                       { "Name": "EXECUTION_ARN", "Value.$": "$$.Execution.Id" }
                     ]
                   }
@@ -169,13 +171,10 @@
               "jobId.$": "$.jobId",
               "workerId.$": "$.workerId",
               "payload.$": "$.payload",
+              "resultS3Key.$": "$.resultS3Key",
               "attempt.$": "$.retryCount",
-              "status": "SUCCEEDED",
-              "errorType": "NONE",
-              "message": "worker task completed",
-              "productTotal": 2,
-              "productSucceeded": 2,
-              "queuedCount": 2
+              "status": "TASK_SUCCEEDED",
+              "message": "worker task exited 0; inspect S3 result"
             },
             "End": true
           },
@@ -185,6 +184,7 @@
               "jobId.$": "$.jobId",
               "workerId.$": "$.workerId",
               "payload.$": "$.payload",
+              "resultS3Key.$": "$.resultS3Key",
               "attempt.$": "$.retryCount",
               "status": "FAILED",
               "errorType": "RETRYABLE",
@@ -211,6 +211,7 @@
         "retryLimit.$": "$.retryLimit",
         "workerId.$": "$$.Map.Item.Value.workerId",
         "payload.$": "$$.Map.Item.Value.payload",
+        "resultS3Key.$": "States.Format('results/{}/{}-attempt-{}.json', $.jobId, $$.Map.Item.Value.workerId, $.retryCount)",
         "executionArn.$": "$$.Execution.Id"
       },
       "ItemProcessor": {
@@ -241,6 +242,7 @@
                     "Name": "__WORKER_CONTAINER_NAME__",
                     "Environment": [
                       { "Name": "WORKER_INPUT", "Value.$": "States.JsonToString($)" },
+                      { "Name": "RESULTS_S3_KEY", "Value.$": "$.resultS3Key" },
                       { "Name": "EXECUTION_ARN", "Value.$": "$$.Execution.Id" }
                     ]
                   }
@@ -271,13 +273,10 @@
               "jobId.$": "$.jobId",
               "workerId.$": "$.workerId",
               "payload.$": "$.payload",
+              "resultS3Key.$": "$.resultS3Key",
               "attempt.$": "$.retryCount",
-              "status": "SUCCEEDED",
-              "errorType": "NONE",
-              "message": "worker task completed",
-              "productTotal": 2,
-              "productSucceeded": 2,
-              "queuedCount": 2
+              "status": "TASK_SUCCEEDED",
+              "message": "worker task exited 0; inspect S3 result"
             },
             "End": true
           },
@@ -287,6 +286,7 @@
               "jobId.$": "$.jobId",
               "workerId.$": "$.workerId",
               "payload.$": "$.payload",
+              "resultS3Key.$": "$.resultS3Key",
               "attempt.$": "$.retryCount",
               "status": "FAILED",
               "errorType": "RETRYABLE",
@@ -311,6 +311,7 @@
           "text.$": "$.text",
           "retryLimit.$": "$.retryLimit",
           "retryCount.$": "$.retryCount",
+          "resultsS3Bucket": "__RESULTS_S3_BUCKET__",
           "allResults.$": "$.allResults",
           "results.$": "$.results",
           "failedWorkersFinal.$": "$.failedWorkersFinal"
