@@ -1,0 +1,374 @@
+{
+  "Comment": "Step Functions + ECS PoC (Distributed Map + S3 ItemReader)",
+  "StartAt": "ValidateWorkflowInput",
+  "TimeoutSeconds": 900,
+  "States": {
+    "ValidateWorkflowInput": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            { "Variable": "$.batchId", "IsPresent": true },
+            { "Variable": "$.text", "IsPresent": true }
+          ],
+          "Next": "InitializeWorkflowContext"
+        }
+      ],
+      "Default": "FailInvalidWorkflowInput"
+    },
+    "InitializeWorkflowContext": {
+      "Type": "Pass",
+      "Parameters": {
+        "batchId.$": "$.batchId",
+        "text.$": "$.text",
+        "jobId.$": "$.batchId",
+        "retryLimit": 1,
+        "retryCount": 0,
+        "workersS3Key.$": "States.Format('workers/{}.json', $.batchId)",
+        "results": [],
+        "allResults": [],
+        "failedWorkersFinal": []
+      },
+      "Next": "RunParentTaskSync"
+    },
+    "RunParentTaskSync": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "TimeoutSeconds": 120,
+      "Parameters": {
+        "LaunchType": "FARGATE",
+        "Cluster": "__PARENT_ECS_CLUSTER_ARN__",
+        "TaskDefinition": "__PARENT_TASK_DEFINITION_ARN__",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": ["__SUBNET_ID_1__", "__SUBNET_ID_2__"],
+            "SecurityGroups": ["__SECURITY_GROUP_ID__"],
+            "AssignPublicIp": "DISABLED"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "__PARENT_CONTAINER_NAME__",
+              "Environment": [
+                { "Name": "STEP_FUNCTIONS_INPUT", "Value.$": "States.JsonToString($)" },
+                { "Name": "WORKERS_S3_BUCKET", "Value": "__WORKERS_S3_BUCKET__" },
+                { "Name": "WORKERS_S3_KEY", "Value.$": "$.workersS3Key" },
+                { "Name": "BATCH_ID", "Value.$": "$.batchId" },
+                { "Name": "EXECUTION_ARN", "Value.$": "$$.Execution.Id" }
+              ]
+            }
+          ]
+        }
+      },
+      "ResultPath": "$.parentTaskExecution",
+      "Retry": [
+        {
+          "ErrorEquals": ["AmazonECS.Unknown", "States.Timeout"],
+          "IntervalSeconds": 10,
+          "BackoffRate": 2,
+          "MaxAttempts": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.fatalError",
+          "Next": "FailParentTaskExecution"
+        }
+      ],
+      "Next": "ValidateParentTaskCompletion"
+    },
+    "ValidateParentTaskCompletion": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.parentTaskExecution.Containers[0].ExitCode",
+          "NumericEquals": 0,
+          "Next": "RunInitialWorkerTasksFromS3"
+        }
+      ],
+      "Default": "FailParentTaskExecution"
+    },
+    "RunInitialWorkerTasksFromS3": {
+      "Type": "Map",
+      "ResultPath": "$.results",
+      "MaxConcurrency": 3,
+      "ToleratedFailurePercentage": 100,
+      "ItemReader": {
+        "Resource": "arn:aws:states:::s3:getObject",
+        "ReaderConfig": { "InputType": "JSON" },
+        "Parameters": {
+          "Bucket": "__WORKERS_S3_BUCKET__",
+          "Key.$": "$.workersS3Key"
+        }
+      },
+      "ItemSelector": {
+        "jobId.$": "$.jobId",
+        "retryCount.$": "$.retryCount",
+        "retryLimit.$": "$.retryLimit",
+        "workerId.$": "$$.Map.Item.Value.workerId",
+        "payload.$": "$$.Map.Item.Value.payload",
+        "executionArn.$": "$$.Execution.Id"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "DISTRIBUTED",
+          "ExecutionType": "STANDARD"
+        },
+        "StartAt": "RunInitialWorkerTaskSync",
+        "States": {
+          "RunInitialWorkerTaskSync": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::ecs:runTask.sync",
+            "TimeoutSeconds": 120,
+            "Parameters": {
+              "LaunchType": "FARGATE",
+              "Cluster": "__WORKER_ECS_CLUSTER_ARN__",
+              "TaskDefinition": "__WORKER_TASK_DEFINITION_ARN__",
+              "NetworkConfiguration": {
+                "AwsvpcConfiguration": {
+                  "Subnets": ["__SUBNET_ID_1__", "__SUBNET_ID_2__"],
+                  "SecurityGroups": ["__SECURITY_GROUP_ID__"],
+                  "AssignPublicIp": "DISABLED"
+                }
+              },
+              "Overrides": {
+                "ContainerOverrides": [
+                  {
+                    "Name": "__WORKER_CONTAINER_NAME__",
+                    "Environment": [
+                      { "Name": "WORKER_INPUT", "Value.$": "States.JsonToString($)" },
+                      { "Name": "EXECUTION_ARN", "Value.$": "$$.Execution.Id" }
+                    ]
+                  }
+                ]
+              }
+            },
+            "ResultPath": "$.workerTaskExecution",
+            "Retry": [
+              {
+                "ErrorEquals": ["AmazonECS.Unknown", "States.Timeout"],
+                "IntervalSeconds": 10,
+                "BackoffRate": 2,
+                "MaxAttempts": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.errorInfo",
+                "Next": "HandleInitialWorkerTaskTechnicalFailure"
+              }
+            ],
+            "Next": "NormalizeInitialWorkerTaskSuccess"
+          },
+          "NormalizeInitialWorkerTaskSuccess": {
+            "Type": "Pass",
+            "Parameters": {
+              "jobId.$": "$.jobId",
+              "workerId.$": "$.workerId",
+              "payload.$": "$.payload",
+              "attempt.$": "$.retryCount",
+              "status": "SUCCEEDED",
+              "errorType": "NONE",
+              "message": "worker task completed",
+              "productTotal": 2,
+              "productSucceeded": 2,
+              "queuedCount": 2
+            },
+            "End": true
+          },
+          "HandleInitialWorkerTaskTechnicalFailure": {
+            "Type": "Pass",
+            "Parameters": {
+              "jobId.$": "$.jobId",
+              "workerId.$": "$.workerId",
+              "payload.$": "$.payload",
+              "attempt.$": "$.retryCount",
+              "status": "FAILED",
+              "errorType": "RETRYABLE",
+              "message.$": "States.Format('technical failure: {}', $.errorInfo.Error)",
+              "productTotal": 0,
+              "productSucceeded": 0,
+              "queuedCount": 0
+            },
+            "End": true
+          }
+        }
+      },
+      "Next": "AggregateWorkerTaskAttemptResults"
+    },
+    "RunRetryWorkerTasks": {
+      "Type": "Map",
+      "ItemsPath": "$.workers",
+      "ResultPath": "$.results",
+      "MaxConcurrency": 3,
+      "ToleratedFailurePercentage": 100,
+      "ItemSelector": {
+        "jobId.$": "$.jobId",
+        "retryCount.$": "$.retryCount",
+        "retryLimit.$": "$.retryLimit",
+        "workerId.$": "$$.Map.Item.Value.workerId",
+        "payload.$": "$$.Map.Item.Value.payload",
+        "executionArn.$": "$$.Execution.Id"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "DISTRIBUTED",
+          "ExecutionType": "STANDARD"
+        },
+        "StartAt": "RunRetryWorkerTaskSync",
+        "States": {
+          "RunRetryWorkerTaskSync": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::ecs:runTask.sync",
+            "TimeoutSeconds": 120,
+            "Parameters": {
+              "LaunchType": "FARGATE",
+              "Cluster": "__WORKER_ECS_CLUSTER_ARN__",
+              "TaskDefinition": "__WORKER_TASK_DEFINITION_ARN__",
+              "NetworkConfiguration": {
+                "AwsvpcConfiguration": {
+                  "Subnets": ["__SUBNET_ID_1__", "__SUBNET_ID_2__"],
+                  "SecurityGroups": ["__SECURITY_GROUP_ID__"],
+                  "AssignPublicIp": "DISABLED"
+                }
+              },
+              "Overrides": {
+                "ContainerOverrides": [
+                  {
+                    "Name": "__WORKER_CONTAINER_NAME__",
+                    "Environment": [
+                      { "Name": "WORKER_INPUT", "Value.$": "States.JsonToString($)" },
+                      { "Name": "EXECUTION_ARN", "Value.$": "$$.Execution.Id" }
+                    ]
+                  }
+                ]
+              }
+            },
+            "ResultPath": "$.workerTaskExecution",
+            "Retry": [
+              {
+                "ErrorEquals": ["AmazonECS.Unknown", "States.Timeout"],
+                "IntervalSeconds": 10,
+                "BackoffRate": 2,
+                "MaxAttempts": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.errorInfo",
+                "Next": "HandleRetryWorkerTaskTechnicalFailure"
+              }
+            ],
+            "Next": "NormalizeRetryWorkerTaskSuccess"
+          },
+          "NormalizeRetryWorkerTaskSuccess": {
+            "Type": "Pass",
+            "Parameters": {
+              "jobId.$": "$.jobId",
+              "workerId.$": "$.workerId",
+              "payload.$": "$.payload",
+              "attempt.$": "$.retryCount",
+              "status": "SUCCEEDED",
+              "errorType": "NONE",
+              "message": "worker task completed",
+              "productTotal": 2,
+              "productSucceeded": 2,
+              "queuedCount": 2
+            },
+            "End": true
+          },
+          "HandleRetryWorkerTaskTechnicalFailure": {
+            "Type": "Pass",
+            "Parameters": {
+              "jobId.$": "$.jobId",
+              "workerId.$": "$.workerId",
+              "payload.$": "$.payload",
+              "attempt.$": "$.retryCount",
+              "status": "FAILED",
+              "errorType": "RETRYABLE",
+              "message.$": "States.Format('technical failure: {}', $.errorInfo.Error)",
+              "productTotal": 0,
+              "productSucceeded": 0,
+              "queuedCount": 0
+            },
+            "End": true
+          }
+        }
+      },
+      "Next": "AggregateWorkerTaskAttemptResults"
+    },
+    "AggregateWorkerTaskAttemptResults": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "__RESULT_AGGREGATOR_LAMBDA_ARN__",
+        "Payload": {
+          "jobId.$": "$.jobId",
+          "text.$": "$.text",
+          "retryLimit.$": "$.retryLimit",
+          "retryCount.$": "$.retryCount",
+          "allResults.$": "$.allResults",
+          "results.$": "$.results",
+          "failedWorkersFinal.$": "$.failedWorkersFinal"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "Next": "HasRetryableFailedWorkerTasks"
+    },
+    "HasRetryableFailedWorkerTasks": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.failedWorkers[0]",
+          "IsPresent": true,
+          "Next": "CanRetryFailedWorkerTasks"
+        }
+      ],
+      "Default": "Finish"
+    },
+    "CanRetryFailedWorkerTasks": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.retryCount",
+          "NumericLessThanPath": "$.retryLimit",
+          "Next": "PrepareNextRetryWorkerTasks"
+        }
+      ],
+      "Default": "FinishWithFailedWorkers"
+    },
+    "PrepareNextRetryWorkerTasks": {
+      "Type": "Pass",
+      "Parameters": {
+        "jobId.$": "$.jobId",
+        "text.$": "$.text",
+        "retryLimit.$": "$.retryLimit",
+        "retryCount.$": "States.MathAdd($.retryCount, 1)",
+        "workers.$": "$.failedWorkers",
+        "results": [],
+        "allResults.$": "$.allResults",
+        "failedWorkersFinal.$": "$.failedWorkersFinal"
+      },
+      "Next": "RunRetryWorkerTasks"
+    },
+    "FinishWithFailedWorkers": {
+      "Type": "Pass",
+      "Next": "Finish"
+    },
+    "Finish": { "Type": "Succeed" },
+    "FailInvalidWorkflowInput": {
+      "Type": "Fail",
+      "Error": "InvalidExecutionInput",
+      "Cause": "Execution input must include batchId and text"
+    },
+    "FailParentTaskExecution": {
+      "Type": "Fail",
+      "Error": "ParentTaskFailed",
+      "Cause": "Parent ECS task failed after retries"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+project          = "sfn-ecs-poc"
+aws_region       = "ap-northeast-1"
+az_count         = 2
+
+# 事前に ECR へ push したイメージ URI
+parent_image_uri = "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/sfn-ecs-poc-parent:latest"
+worker_image_uri = "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/sfn-ecs-poc-worker:latest"
+lambda_image_uri = "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/sfn-ecs-poc-lambda-handler:latest"

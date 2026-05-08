@@ -18,7 +18,7 @@ infra/
 │   ├── modules/
 │   │   ├── network/
 │   │   ├── ecs/
-│   │   ├── ecr/
+│   │   ├── s3/
 │   │   ├── sqs/
 │   │   ├── lambda/
 │   │   ├── stepfunctions/
@@ -51,6 +51,7 @@ infra/
 
 - `apps/` は親タスク、ワーカータスク、Lambda ハンドラーを Go で実装する前提です。
 - `statemachine/workflow.asl.json` は ASL の定義本体とし、Terraform (`file` または `templatefile`) から読み込みます。
+- ECR リポジトリは Terraform ではなく手動作成・手動 push 前提です。
 - この PoC では、シェルスクリプト (`.sh`) は意図的に使用しません。
 - 運用手順は `../README.md` に記載します。
 - このコンテナ内では Docker コマンドを実行せず、ECR へのイメージ push はコンテナ外で手動対応します。
